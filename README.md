@@ -20,7 +20,6 @@ In this example, the default value of Bar.Hello will now be "World". This allows
 Unfortunately, generic type parameters are not supported. https://github.com/dotnet/csharplang/discussions/7252
 
 Given the following class:
-
 ```
 public class Foo<T> where T : new()
 {
@@ -31,7 +30,6 @@ public class Foo<T> where T : new()
 ```
 
 Does not work:
-
 ```
 public partial class Bar<T> where T : new()
 {
@@ -44,7 +42,6 @@ public partial class Bar<T> where T : new()
 ```
 
 Does work:
-
 ```
 public partial class Bar<T> where T : new()
 {
