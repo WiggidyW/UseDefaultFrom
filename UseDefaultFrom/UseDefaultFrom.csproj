@@ -9,23 +9,19 @@
     <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
     <Version>0.0.1</Version>
     <Description>Reuse default property values from other classes</Description>
+    <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+    <PackageProjectUrl>https://github.com/WiggidyW/UseDefaultFrom</PackageProjectUrl>
+    <PackageTags>default;util;generators;sourcegen;roslyn;qol</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference
-      Include="Microsoft.CodeAnalysis.CSharp"
-      Version="4.9.2" />
-    <PackageReference
-      Include="Microsoft.CodeAnalysis.Analyzers"
-      Version="3.11.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.9.2" />
+    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" Version="3.11.0" />
   </ItemGroup>
 
   <ItemGroup>
-    <None
-      Include="$(OutputPath)\$(AssemblyName).dll"
-      Pack="true"
-      PackagePath="analyzers/dotnet/cs"
-      Visible="false" />
+    <None Include="$(OutputPath)\$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
   </ItemGroup>
 
 </Project>
