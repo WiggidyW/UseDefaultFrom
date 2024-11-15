@@ -38,7 +38,7 @@ public partial class Bar<T> where T : new()
     [UseDefaultFrom<Foo<T>>(nameof(Foo.Hello))]
     public partial string Hello { get; set; }
 
-    [UseDefaultFrom<Foo<T>>(nameof(Foo.Hello))]
+    [UseDefaultFrom<Foo<T>>(nameof(Foo.Data))]
     public partial T Data { get; set; }
 }
 ```
