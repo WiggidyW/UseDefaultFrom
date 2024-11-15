@@ -6,61 +6,148 @@ using Microsoft.CodeAnalysis.Text;
 
 namespace UseDefaultFrom;
 
-#pragma warning disable RS1035 // Do not use APIs banned for analyzers
+internal class TargetTypeWithUDFProperties
+{
+    public readonly INamedTypeSymbol TargetType;
+
+    // [UseDefaultFrom] properties on the target type
+    public readonly IEnumerable<UDFProperty> UDFProperties;
+
+    // SemanticModel for the target type
+    public readonly SemanticModel SemanticModel;
+
+    public TargetTypeWithUDFProperties(
+        INamedTypeSymbol targetType,
+        IEnumerable<UDFProperty> udfProperties,
+        SemanticModel semanticModel
+    )
+    {
+        TargetType = targetType;
+        UDFProperties = udfProperties;
+        SemanticModel = semanticModel;
+    }
+}
+
+internal class UDFProperty
+{
+    public readonly IPropertySymbol TargetProperty;
+    public readonly INamedTypeSymbol SourceType;
+    public readonly IPropertySymbol SourceProperty;
+
+    public UDFProperty(
+        IPropertySymbol targetProperty,
+        INamedTypeSymbol sourceType,
+        IPropertySymbol sourceProperty
+    )
+    {
+        TargetProperty = targetProperty;
+        SourceType = sourceType;
+        SourceProperty = sourceProperty;
+    }
+}
 
 [Generator]
 // Target is the class that has the attributes, and is reusing defaults
 // Source is the class that has the defaults
-public class UseDefaultFromGenerator : ISourceGenerator
+public class UseDefaultFromGenerator : IIncrementalGenerator
 {
-    public void Initialize(GeneratorInitializationContext context)
+    void IIncrementalGenerator.Initialize(
+        IncrementalGeneratorInitializationContext context
+    )
     {
-        // Register a syntax receiver to collect candidate nodes
-        context.RegisterForSyntaxNotifications(
-            () => new UseDefaultFromSyntaxReceiver()
+        // For each TypeDeclaration Node,
+        // Select properties with [UseDefaultFrom] attribute
+        IncrementalValuesProvider<TargetTypeWithUDFProperties> propertiesWithAttribute =
+            context.SyntaxProvider.CreateSyntaxProvider(
+                predicate: static (node, _) => node is TypeDeclarationSyntax,
+                transform: static (context, _) =>
+                {
+                    INamedTypeSymbol targetType =
+                        context.SemanticModel.GetDeclaredSymbol(
+                            (TypeDeclarationSyntax)context.Node
+                        )!;
+                    IEnumerable<UDFProperty> udfProperties = GetUDFProperties(
+                        targetType
+                    );
+                    return new TargetTypeWithUDFProperties(
+                        targetType,
+                        udfProperties,
+                        context.SemanticModel
+                    );
+                }
+            );
+
+        // Create a source output for each target type with [UseDefaultFrom] properties
+        // Generate a partial class with default values for each property
+        context.RegisterSourceOutput(
+            propertiesWithAttribute,
+            static (context, property) =>
+            {
+                (string FileName, SourceText FileContent)? generatedFile =
+                    GenerateForTarget(
+                        property.TargetType,
+                        property.UDFProperties,
+                        property.SemanticModel
+                    );
+                if (generatedFile != null)
+                // TargetType has properties with [UseDefaultFrom]
+                {
+                    context.AddSource(
+                        generatedFile.Value.FileName,
+                        generatedFile.Value.FileContent
+                    );
+                }
+            }
         );
     }
 
-    public void Execute(GeneratorExecutionContext context)
+    // Returns all properties marked with [UseDefaultFrom] on the target type
+    private static IEnumerable<UDFProperty> GetUDFProperties(
+        INamedTypeSymbol targetType
+    )
     {
-        // Retrieve the syntax receiver
-        UseDefaultFromSyntaxReceiver receiver = (UseDefaultFromSyntaxReceiver)(
-            context.SyntaxContextReceiver ?? throw new Exception("Unreachable")
-        );
-
-        // Group properties by their containing class
-        IEnumerable<
-            IGrouping<ISymbol?, (IPropertySymbol, AttributeData)>
-        > targetPropertiesGrouped = receiver.CandidateProperties.GroupBy(
-            p => p.Item1.ContainingType,
-            SymbolEqualityComparer.Default
-        );
-
-        // Process each property with [UseDefaultFrom]
         foreach (
-            IGrouping<
-                ISymbol?,
-                (IPropertySymbol, AttributeData)
-            > targetProperties in targetPropertiesGrouped
+            IPropertySymbol targetProperty in targetType
+                .GetMembers()
+                .OfType<IPropertySymbol>()
         )
         {
-            INamedTypeSymbol? targetType = (INamedTypeSymbol)(
-                targetProperties.Key ?? throw new Exception("Unreachable")
-            );
+            AttributeData? attributeData = targetProperty
+                .GetAttributes()
+                .FirstOrDefault(
+                    (AttributeData attribute) =>
+                        attribute.AttributeClass?.Name
+                        == "UseDefaultFromAttribute"
+                );
+            if (attributeData == null)
+            // It's not a property with [UseDefaultFrom]
+            {
+                continue;
+            }
 
-            (string fileName, SourceText fileContent) = GenerateForTarget(
-                context,
-                targetType,
-                targetProperties
-            );
+            // The source type is the single type parameter of the attribute
+            INamedTypeSymbol sourceType = (INamedTypeSymbol)
+                attributeData.AttributeClass!.TypeArguments[0];
 
-            // Add the generated source code to the compilation
-            context.AddSource(fileName, fileContent);
+            // The source property is the single constructor argument of the attribute
+            string sourcePropertyName = (string)
+                attributeData.ConstructorArguments[0].Value!;
+            IPropertySymbol sourceProperty =
+                GetPropertyByName(sourceType, sourcePropertyName)
+                ?? throw new ArgumentException(
+                    $"The property '{sourcePropertyName}' does not exist on '{sourceType.Name}'."
+                );
+
+            yield return new UDFProperty(
+                targetProperty,
+                sourceType,
+                sourceProperty
+            );
         }
     }
 
-    // recursively search the inheritance hierarchy for the property
-    private IPropertySymbol? GetProperty(
+    // recursively search the inheritance hierarchy for the property with the specified name
+    private static IPropertySymbol? GetPropertyByName(
         INamedTypeSymbol type,
         string? propertyName
     )
@@ -74,7 +161,7 @@ public class UseDefaultFromGenerator : ISourceGenerator
         }
         else if (type.BaseType != null)
         {
-            return GetProperty(type.BaseType, propertyName);
+            return GetPropertyByName(type.BaseType, propertyName);
         }
         else
         {
@@ -82,10 +169,12 @@ public class UseDefaultFromGenerator : ISourceGenerator
         }
     }
 
-    private (string fileName, SourceText fileContent) GenerateForTarget(
-        GeneratorExecutionContext context,
+    // Generate a partial class with default values for each property
+    // If there are no properties with [UseDefaultFrom], return null
+    private static (string FileName, SourceText FileContent)? GenerateForTarget(
         INamedTypeSymbol targetType,
-        IEnumerable<(IPropertySymbol, AttributeData)> targetProperties
+        IEnumerable<UDFProperty> udfProperties,
+        SemanticModel semanticModel
     )
     {
         StringBuilder sourceTextBuilder = new();
@@ -94,38 +183,22 @@ public class UseDefaultFromGenerator : ISourceGenerator
             $"namespace {targetType.ContainingNamespace}"
         );
         sourceTextBuilder.AppendLine("{");
-        sourceTextBuilder.AppendLine($"    {targetType.PartialDeclaration()}");
+        sourceTextBuilder.AppendLine(
+            $"    {targetType.PartialTypeDeclaration()}"
+        );
         sourceTextBuilder.AppendLine("    {");
 
         // Iterate through each target property that has the [UseDefaultFrom] attribute
-        foreach (
-            (
-                IPropertySymbol targetProperty,
-                AttributeData targetPropertyAttribute
-            ) in targetProperties
-        )
+        bool hasAnyProperties = false;
+        foreach (UDFProperty udfProperty in udfProperties)
         {
-            // Retrieve the type of the source property's owner
-            INamedTypeSymbol sourceType = (INamedTypeSymbol)
-                targetPropertyAttribute.AttributeClass!.TypeArguments[0];
-
-            // Retrieve the source property
-            string? sourcePropertyName =
-                targetPropertyAttribute.ConstructorArguments[0].Value as string;
-            IPropertySymbol? sourceProperty = GetProperty(
-                sourceType,
-                sourcePropertyName!
-            );
-            if (sourceProperty == null)
-            {
-                throw new ArgumentException(
-                    $"The property '{sourcePropertyName}' does not exist on '{sourceType.Name}'."
-                );
-            }
+            IPropertySymbol sourceProperty = udfProperty.SourceProperty;
+            IPropertySymbol targetProperty = udfProperty.TargetProperty;
+            hasAnyProperties = true;
 
             // Create a private field that we can set the default to
             string defaultValue = GetDefaultPropertyValue(
-                context,
+                semanticModel,
                 sourceProperty
             );
             sourceTextBuilder.AppendLine(
@@ -149,18 +222,18 @@ public class UseDefaultFromGenerator : ISourceGenerator
             sourceTextBuilder.AppendLine();
         }
 
+        if (!hasAnyProperties)
+        // No point in generating a partial class with nothing in it
+        {
+            return null;
+        }
+
         // Remove final trailing newline
         sourceTextBuilder.Length -= 2;
 
         // Close brackets
         sourceTextBuilder.AppendLine("    }");
         sourceTextBuilder.AppendLine("}");
-
-        // Write to a file for debugging
-        File.WriteAllText(
-            $"C:\\Users\\rigglesr\\Desktop\\Txt\\{targetType.Name}Defaults.g.cs",
-            sourceTextBuilder.ToString()
-        );
 
         // Add the generated source code to the compilation
         return (
@@ -169,8 +242,8 @@ public class UseDefaultFromGenerator : ISourceGenerator
         );
     }
 
-    private string GetDefaultPropertyValue(
-        GeneratorExecutionContext context,
+    private static string GetDefaultPropertyValue(
+        SemanticModel semanticModel,
         IPropertySymbol property
     )
     {
@@ -188,18 +261,15 @@ public class UseDefaultFromGenerator : ISourceGenerator
         else
         // Default value is an expression, parse it
         {
-            return ParseValueExpression(context, initializer.Value);
+            return ParseValueExpression(semanticModel, initializer.Value);
         }
     }
 
-    private string ParseValueExpression(
-        GeneratorExecutionContext context,
+    private static string ParseValueExpression(
+        SemanticModel semanticModel,
         ExpressionSyntax expression
     )
     {
-        SemanticModel semanticModel = context.Compilation.GetSemanticModel(
-            expression.SyntaxTree
-        );
         SymbolInfo symbolInfo = semanticModel.GetSymbolInfo(expression);
         ISymbol? symbol = symbolInfo.Symbol;
         if (symbol == null)
@@ -247,7 +317,7 @@ public class UseDefaultFromGenerator : ISourceGenerator
                 invokeBuilder.Append($"{argument.NameColon.Name}: ");
             }
             invokeBuilder.Append(
-                ParseValueExpression(context, argument.Expression)
+                ParseValueExpression(semanticModel, argument.Expression)
             );
             invokeBuilder.Append(", ");
         }
@@ -259,41 +329,4 @@ public class UseDefaultFromGenerator : ISourceGenerator
         invokeBuilder.Append(")");
         return invokeBuilder.ToString();
     }
-
-    // Syntax Receiver to collect properties with [UseDefaultFrom] attribute
-    class UseDefaultFromSyntaxReceiver : ISyntaxContextReceiver
-    {
-        public List<(
-            IPropertySymbol,
-            AttributeData
-        )> CandidateProperties { get; } = new();
-
-        public void OnVisitSyntaxNode(GeneratorSyntaxContext context)
-        {
-            // Look for properties with [UseDefaultFrom] attribute
-            if (
-                context.Node is PropertyDeclarationSyntax propertyDeclaration
-                && context.SemanticModel.GetDeclaredSymbol(propertyDeclaration)
-                    is IPropertySymbol propertySymbol
-            )
-            {
-                AttributeData? useDefaultFromAttribute = propertySymbol
-                    .GetAttributes()
-                    .FirstOrDefault(attr =>
-                        attr.AttributeClass?.IsGenericType == true
-                        && attr.AttributeClass.Name.StartsWith(
-                            "UseDefaultFromAttribute"
-                        )
-                    );
-                if (useDefaultFromAttribute != null)
-                {
-                    CandidateProperties.Add(
-                        (propertySymbol, useDefaultFromAttribute)
-                    );
-                }
-            }
-        }
-    }
 }
-
-#pragma warning restore RS1035 // Do not use APIs banned for analyzers
