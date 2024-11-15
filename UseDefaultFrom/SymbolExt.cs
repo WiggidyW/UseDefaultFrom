@@ -2,24 +2,7 @@ using Microsoft.CodeAnalysis;
 
 namespace UseDefaultFrom;
 
-public static class SymbolExt
-{
-    public static string AccessibilityString<TThis>(this TThis symbol)
-        where TThis : ISymbol
-    {
-        string accessibilityWithName = symbol.ToDisplayString(
-            new SymbolDisplayFormat(
-                memberOptions: SymbolDisplayMemberOptions.IncludeAccessibility
-            )
-        );
-        int finalSpaceIndex = accessibilityWithName.LastIndexOf(' ');
-        return finalSpaceIndex == -1
-            ? string.Empty
-            : accessibilityWithName.Substring(0, finalSpaceIndex);
-    }
-}
-
-public static class PropertySymbolExt
+internal static class PropertySymbolExt
 {
     // Does not include 'get' or 'set' or any trailing ';'
     public static string PartialPropertyDeclaration<TThis>(this TThis symbol)
@@ -44,19 +27,21 @@ public static class PropertySymbolExt
     }
 }
 
-public static class NamedTypeSymbolExt
+internal static class NamedTypeSymbolExt
 {
     // Does not include accessibility or the opening '{' of the declaration
-    public static string PartialDeclaration<TThis>(this TThis symbol)
+    public static string PartialTypeDeclaration<TThis>(this TThis symbol)
         where TThis : INamedTypeSymbol
     {
-        string declarationString = symbol.ToDisplayString(
-            new SymbolDisplayFormat(
-                genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeParameters
-                    | SymbolDisplayGenericsOptions.IncludeVariance,
-                kindOptions: SymbolDisplayKindOptions.IncludeTypeKeyword
-            )
-        );
+        string partialDeclarationString =
+            "partial "
+            + symbol.ToDisplayString(
+                new SymbolDisplayFormat(
+                    genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeParameters
+                        | SymbolDisplayGenericsOptions.IncludeVariance,
+                    kindOptions: SymbolDisplayKindOptions.IncludeTypeKeyword
+                )
+            );
         string typeParameterConstraintsString = symbol.ToDisplayString(
             new SymbolDisplayFormat(
                 genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeParameters
@@ -66,7 +51,7 @@ public static class NamedTypeSymbolExt
         );
         int whereIndex = typeParameterConstraintsString.IndexOf("where");
         return whereIndex == -1
-            ? $"partial {declarationString}"
-            : $"partial {declarationString} {typeParameterConstraintsString.Substring(whereIndex)}";
+            ? partialDeclarationString
+            : $"{partialDeclarationString} {typeParameterConstraintsString.Substring(whereIndex)}";
     }
 }
